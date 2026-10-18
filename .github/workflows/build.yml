@@ -18,10 +18,6 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/25.2.9519653
       ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/25.2.9519653
-      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/25.2.9519653
-      ANDROIDNDK: /usr/local/lib/android/sdk/ndk/25.2.9519653
-      ANDROIDAPI: "33"
-      ANDROIDMINAPI: "24"
       PIP_NO_INPUT: "1"
 
     steps:
@@ -47,23 +43,14 @@ jobs:
             autoconf automake libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libtinfo5 cmake libffi-dev libssl-dev \
-            build-essential
+            libltdl-dev build-essential
 
-      - name: Prepare Android SDK and sdkmanager
+      - name: Prepare Android SDK and Tools
         shell: bash
         run: |
           set -euo pipefail
-
           SDK="$ANDROID_SDK_ROOT"
-
-          SDKMANAGER="$(find "$SDK/cmdline-tools" \
-            -type f -name sdkmanager 2>/dev/null | head -n 1)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::Android sdkmanager bulunamadı."
-            find "$SDK" -type f -name sdkmanager -print || true
-            exit 1
-          fi
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
 
           mkdir -p "$SDK/tools/bin"
           ln -sfn "$SDKMANAGER" "$SDK/tools/bin/sdkmanager"
@@ -78,21 +65,9 @@ jobs:
             "build-tools;33.0.2" \
             "ndk;25.2.9519653"
 
-          test -x "$SDK/tools/bin/sdkmanager"
-          test -d "$ANDROID_NDK_HOME"
-
           echo "$SDK/tools/bin" >> "$GITHUB_PATH"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/build-tools/33.0.2" >> "$GITHUB_PATH"
-
-          echo "=== Android SDK ==="
-          echo "$ANDROID_HOME"
-          echo "=== Android NDK ==="
-          echo "$ANDROID_NDK_HOME"
-          echo "=== Java ==="
-          java -version
-          echo "=== sdkmanager ==="
-          "$SDK/tools/bin/sdkmanager" --version
 
       - name: Install Buildozer
         shell: bash
@@ -100,153 +75,97 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install buildozer cython==0.29.36
-          python -m pip show buildozer
 
-      - name: Configure project
+      - name: Prepare Project Directory & Configure buildozer.spec
         shell: bash
         run: |
           set -euo pipefail
 
-          PROJECT="$GITHUB_WORKSPACE/SQZGIN_NEON_ESCAPE - Kopya"
-          SPEC="$PROJECT/buildozer.spec"
+          # Boşluklu klasör adından kaçınmak için temiz bir çalışma dizini oluşturuyoruz
+          WORK_DIR="$RUNNER_TEMP/project_build"
+          mkdir -p "$WORK_DIR"
+          cp -r "$GITHUB_WORKSPACE/SQZGIN_NEON_ESCAPE - Kopya/." "$WORK_DIR/"
+
+          SPEC="$WORK_DIR/buildozer.spec"
 
           if [ ! -f "$SPEC" ]; then
             echo "::error::buildozer.spec bulunamadı."
-            find "$GITHUB_WORKSPACE" -maxdepth 5 \
-              -name buildozer.spec -print
             exit 1
           fi
 
           python - "$SPEC" <<'PY'
-          import sys
+import sys
 
-          path = sys.argv[1]
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    lines = f.readlines()
 
-          with open(path, encoding="utf-8") as f:
-              lines = f.readlines()
+settings = {
+    "android.sdk_path": "/usr/local/lib/android/sdk",
+    "android.ndk_path": "/usr/local/lib/android/sdk/ndk/25.2.9519653",
+    "android.accept_sdk_license": "True",
+    "android.api": "33",
+    "android.minapi": "24",
+}
 
-          settings = {
-              "android.sdk_path": "/usr/local/lib/android/sdk",
-              "android.ndk_path": (
-                  "/usr/local/lib/android/sdk/ndk/25.2.9519653"
-              ),
-              "android.accept_sdk_license": "True",
-          }
+output = []
+in_app = False
 
-          output = []
-          seen = set()
-          in_app = False
-          app_found = False
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_app = (stripped.lower() == "[app]")
+    
+    if in_app and "=" in stripped and not stripped.startswith(("#", ";")):
+        key = stripped.split("=", 1)[0].strip().lower()
+        if key in settings:
+            output.append(f"{key} = {settings[key]}\n")
+            del settings[key]
+            continue
+            
+    output.append(line)
 
-          for line in lines:
-              stripped = line.strip()
+# Eksik kalan ayarları ekle
+if settings:
+    output.append("\n# Added by CI\n")
+    for k, v in settings.items():
+        output.append(f"{k} = {v}\n")
 
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  if in_app:
-                      for key, value in settings.items():
-                          if key not in seen:
-                              output.append(f"{key} = {value}\n")
-                              seen.add(key)
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(output)
 
-                  in_app = stripped.lower() == "[app]"
-                  if in_app:
-                      app_found = True
+print("buildozer.spec ayarları güncellendi.")
+PY
 
-                  output.append(line)
-                  continue
-
-              if (
-                  in_app
-                  and "=" in stripped
-                  and not stripped.startswith(("#", ";"))
-              ):
-                  key = stripped.split("=", 1)[0].strip().lower()
-
-                  if key in settings:
-                      if key not in seen:
-                          output.append(f"{key} = {settings[key]}\n")
-                          seen.add(key)
-                      continue
-
-              output.append(line)
-
-          if in_app:
-              for key, value in settings.items():
-                  if key not in seen:
-                      output.append(f"{key} = {value}\n")
-                      seen.add(key)
-
-          if not app_found:
-              raise SystemExit(
-                  "buildozer.spec içinde [app] bölümü bulunamadı."
-              )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.writelines(output)
-
-          print("buildozer.spec ayarları güncellendi.")
-          PY
-
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-
-          echo "=== Proje dosyaları ==="
-          ls -la "$PROJECT"
+          echo "WORK_DIR=$WORK_DIR" >> "$GITHUB_ENV"
 
       - name: Build Android APK
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          cd "$WORK_DIR"
 
-          cd "$PROJECT"
-
-          # Buildozer depolama yolunda boşluk bulunmamalı.
-          STORAGE_DIR="$RUNNER_TEMP/buildozer"
+          STORAGE_DIR="$RUNNER_TEMP/buildozer_storage"
           mkdir -p "$STORAGE_DIR"
 
-          echo "=== Derleme ortamı ==="
-          python --version
-          java -version
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          echo "STORAGE_DIR=$STORAGE_DIR"
-
           set +e
-          buildozer -v android debug \
-            --storage-dir "$STORAGE_DIR" 2>&1 | tee build.log
+          buildozer -v android debug --storage-dir "$STORAGE_DIR" 2>&1 | tee build.log
           BUILD_STATUS=${PIPESTATUS[0]}
           set -e
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
             echo "::error::APK derlemesi başarısız oldu."
-            echo "=== Hata kayıtları ==="
-            grep -inE \
-              'Traceback|Error|ERROR|Exception|failed|not found|No recipe|NDK|Aidl|space' \
-              build.log | tail -n 100 || true
             exit "$BUILD_STATUS"
           fi
 
-          echo "=== Oluşturulan APK dosyaları ==="
-          find bin -maxdepth 2 -type f -name '*.apk' -print
-
-          if ! find bin -maxdepth 2 -type f -name '*.apk' -print -quit | grep -q .; then
-            echo "::error::Derleme başarılı göründü ancak APK bulunamadı."
-            exit 1
-          fi
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Neon-Escape-Build-Log
-          path: SQZGIN_NEON_ESCAPE - Kopya/build.log
-          if-no-files-found: warn
-          retention-days: 7
+          mkdir -p "$GITHUB_WORKSPACE/output_apk"
+          cp bin/*.apk "$GITHUB_WORKSPACE/output_apk/" || true
 
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Neon-Escape-APK
-          path: SQZGIN_NEON_ESCAPE - Kopya/bin/*.apk
+          path: output_apk/*.apk
           if-no-files-found: error
           retention-days: 14
