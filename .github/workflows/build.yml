@@ -24,9 +24,14 @@ jobs:
         pip install --upgrade pip
         pip install buildozer cython
 
-    - name: Build APK with Buildozer
+    - name: Accept Android SDK Licenses & Build APK
       run: |
         cd "SQZGIN_NEON_ESCAPE - Kopya"
+        # Android SDK lisanslarını önceden kabul et
+        mkdir -p ~/.android
+        touch ~/.android/repositories.cfg
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        # Derlemeyi başlat
         buildozer -v android debug
 
     - name: Upload APK Artifact
