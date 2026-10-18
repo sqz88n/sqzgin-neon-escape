@@ -29,11 +29,16 @@ jobs:
         ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         ANDROID_HOME: /usr/local/lib/android/sdk
       run: |
-        # GitHub'daki hazır SDK lisanslarını otomatik kabul et
+        # Lisansları ve gerekli araçları garantiye alalım
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-        
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platform-tools" "platforms;android-34" || true
+
         cd "SQZGIN_NEON_ESCAPE - Kopya"
-        # Buildozer'a sistemdeki hazır SDK'yı kullanmasını söylüyoruz
+        
+        # buildozer.spec dosyasına sistem SDK yolunu zorla yazdırıyoruz
+        sed -i 's|#android.sdk_path =.*|android.sdk_path = /usr/local/lib/android/sdk|g' buildozer.spec
+        sed -i 's|android.sdk_path =.*|android.sdk_path = /usr/local/lib/android/sdk|g' buildozer.spec
+
         buildozer -v android debug
 
     - name: Upload APK Artifact
