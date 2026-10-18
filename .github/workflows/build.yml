@@ -26,11 +26,11 @@ jobs:
 
     - name: Build APK with Buildozer
       run: |
-        cd SQZGIN_NEON_ESCAPE
+        cd "SQZGIN_NEON_ESCAPE - Kopya"
         buildozer -v android debug
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: package
-        path: SQZGIN_NEON_ESCAPE/bin/*.apk
+        path: "SQZGIN_NEON_ESCAPE - Kopya/bin/*.apk"
