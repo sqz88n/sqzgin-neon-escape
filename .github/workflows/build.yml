@@ -1,4 +1,3 @@
-
 name: Build Neon Escape APK
 
 on:
@@ -69,10 +68,17 @@ jobs:
       - name: Accept licenses and install Android tools
         shell: bash
         run: |
-          set -e
-          set +o pipefail
+          set -euo pipefail
+
+          SDK="$ANDROID_SDK_ROOT"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager bulunamadı"
+            exit 1
+          fi
+
           yes | "$SDKMANAGER" --licenses || true
-          set -o pipefail
 
           "$SDKMANAGER" --install \
             "platform-tools" \
@@ -80,14 +86,22 @@ jobs:
             "build-tools;33.0.2" \
             "ndk;25.2.9519653"
 
-          AIDL="$ANDROID_SDK_ROOT/build-tools/33.0.2/aidl"
+          AIDL="$SDK/build-tools/33.0.2/aidl"
 
-          if [ ! -x "$AIDL" ]; then
-            echo "::error::AIDL yüklenemedi: $AIDL"
+          if [ ! -f "$AIDL" ]; then
+            echo "::error::AIDL dosyası bulunamadı"
+            find "$SDK/build-tools" -type f -name aidl -print
             exit 1
           fi
 
-          "$AIDL" --version
+          chmod +x "$AIDL"
+
+          echo "AIDL dosyası mevcut: $AIDL"
+          file "$AIDL"
+          "$AIDL" --version || true
+
+          echo "$SDK/build-tools/33.0.2" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install Buildozer
         run: |
