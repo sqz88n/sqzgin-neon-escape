@@ -95,12 +95,12 @@ jobs:
           "$SDK/tools/bin/sdkmanager" --version
 
       - name: Install Buildozer
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install buildozer cython==0.29.36
-
           python -m pip show buildozer
-          python -m pip show python-for-android || true
 
       - name: Configure project
         shell: bash
@@ -184,17 +184,13 @@ jobs:
           with open(path, "w", encoding="utf-8") as f:
               f.writelines(output)
 
-          print("Android ayarları güncellendi.")
+          print("buildozer.spec ayarları güncellendi.")
           PY
 
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
           echo "=== Proje dosyaları ==="
           ls -la "$PROJECT"
-
-          echo "=== buildozer.spec Android ayarları ==="
-          grep -nE '^(android\.sdk_path|android\.ndk_path|android\.accept_sdk_license|android\.api|android\.minapi|requirements|p4a\.bootstrap) *=' \
-            "$SPEC" || true
 
       - name: Build Android APK
         shell: bash
@@ -203,44 +199,46 @@ jobs:
 
           cd "$PROJECT"
 
-          echo "=== Build ortamı ==="
+          # Buildozer depolama yolunda boşluk bulunmamalı.
+          STORAGE_DIR="$RUNNER_TEMP/buildozer"
+          mkdir -p "$STORAGE_DIR"
+
+          echo "=== Derleme ortamı ==="
           python --version
           java -version
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          echo "ANDROIDNDK=$ANDROIDNDK"
-          echo "ANDROIDAPI=$ANDROIDAPI"
-          echo "ANDROIDMINAPI=$ANDROIDMINAPI"
-
-          echo "=== Buildozer derlemesi başlıyor ==="
+          echo "STORAGE_DIR=$STORAGE_DIR"
 
           set +e
-          buildozer -v android debug 2>&1 | tee build.log
+          buildozer -v android debug \
+            --storage-dir "$STORAGE_DIR" 2>&1 | tee build.log
           BUILD_STATUS=${PIPESTATUS[0]}
           set -e
 
-          echo "Buildozer çıkış kodu: $BUILD_STATUS"
-
           if [ "$BUILD_STATUS" -ne 0 ]; then
-            echo "::error::APK derlemesi başarısız oldu. build.log kaydedildi."
-            echo "=== Günlükteki hata satırları ==="
+            echo "::error::APK derlemesi başarısız oldu."
+            echo "=== Hata kayıtları ==="
             grep -inE \
-              'Traceback|Error|ERROR|Exception|failed|not found|No recipe|NDK|Aidl' \
+              'Traceback|Error|ERROR|Exception|failed|not found|No recipe|NDK|Aidl|space' \
               build.log | tail -n 100 || true
             exit "$BUILD_STATUS"
           fi
 
-          echo "=== Üretilen APK dosyaları ==="
+          echo "=== Oluşturulan APK dosyaları ==="
           find bin -maxdepth 2 -type f -name '*.apk' -print
+
+          if ! find bin -maxdepth 2 -type f -name '*.apk' -print -quit | grep -q .; then
+            echo "::error::Derleme başarılı göründü ancak APK bulunamadı."
+            exit 1
+          fi
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Neon-Escape-Build-Log
-          path: |
-            SQZGIN_NEON_ESCAPE - Kopya/build.log
+          path: SQZGIN_NEON_ESCAPE - Kopya/build.log
           if-no-files-found: warn
           retention-days: 7
 
