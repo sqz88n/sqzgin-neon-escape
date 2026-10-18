@@ -1,3 +1,4 @@
+
 name: Build Neon Escape APK
 
 on:
@@ -22,63 +23,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Java
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: System dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip curl \
+            git zip unzip curl file \
             autoconf automake libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libtinfo5 cmake libffi-dev libssl-dev \
             build-essential
 
-      - name: Locate Android SDK
-        shell: bash
-        run: |
-          set -e
-          SDK="$ANDROID_SDK_ROOT"
-
-          if [ ! -d "$SDK" ]; then
-            echo "::error::Android SDK bulunamadı: $SDK"
-            exit 1
-          fi
-
-          SDKMANAGER="$(find "$SDK/cmdline-tools" \
-            -type f -name sdkmanager 2>/dev/null | head -n 1)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager bulunamadı."
-            exit 1
-          fi
-
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Accept licenses and install Android tools
+      - name: Prepare Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
           SDK="$ANDROID_SDK_ROOT"
-          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null | head -n 1)"
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager bulunamadı"
+            echo "::error::sdkmanager bulunamadı: $SDK"
             exit 1
           fi
 
+          # Accept licenses without failing on a closed input pipe.
+          set +o pipefail
           yes | "$SDKMANAGER" --licenses || true
+          set -o pipefail
 
           "$SDKMANAGER" --install \
             "platform-tools" \
@@ -86,51 +69,108 @@ jobs:
             "build-tools;33.0.2" \
             "ndk;25.2.9519653"
 
-          AIDL="$SDK/build-tools/33.0.2/aidl"
+          test -x "$SDK/build-tools/33.0.2/aidl"
+          "$SDK/build-tools/33.0.2/aidl" --version
 
-          if [ ! -f "$AIDL" ]; then
-            echo "::error::AIDL dosyası bulunamadı"
-            find "$SDK/build-tools" -type f -name aidl -print
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/build-tools/33.0.2" >> "$GITHUB_PATH"
+
+      - name: Configure Buildozer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="$GITHUB_WORKSPACE/SQZGIN_NEON_ESCAPE - Kopya"
+          SPEC="$PROJECT/buildozer.spec"
+
+          if [ ! -f "$SPEC" ]; then
+            find "$GITHUB_WORKSPACE" -maxdepth 5 \
+              -name buildozer.spec -print
+            echo "::error::buildozer.spec bulunamadı"
             exit 1
           fi
 
-          chmod +x "$AIDL"
+          python - "$SPEC" <<'PY'
+          import configparser
+          import sys
 
-          echo "AIDL dosyası mevcut: $AIDL"
-          file "$AIDL"
-          "$AIDL" --version || true
+          path = sys.argv[1]
 
-          echo "$SDK/build-tools/33.0.2" >> "$GITHUB_PATH"
-          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          cfg = configparser.ConfigParser(
+              interpolation=None,
+              strict=False,
+              inline_comment_prefixes=("#", ";")
+          )
+          cfg.read(path, encoding="utf-8")
+
+          if not cfg.has_section("app"):
+              raise SystemExit("[app] bölümü bulunamadı")
+
+          settings = {
+              "android.sdk_path": "/usr/local/lib/android/sdk",
+              "android.ndk_path": (
+                  "/usr/local/lib/android/sdk/ndk/25.2.9519653"
+              ),
+              "android.accept_sdk_license": "True",
+              "android.api": "33",
+              "android.minapi": "23",
+              "android.build_tools_version": "33.0.2",
+          }
+
+          lines = open(path, encoding="utf-8").readlines()
+          output = []
+          in_app = False
+          seen = set()
+
+          for line in lines:
+              stripped = line.strip()
+
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  if in_app:
+                      for key, value in settings.items():
+                          if key not in seen:
+                              output.append(f"{key} = {value}\n")
+                  in_app = stripped.lower() == "[app]"
+                  output.append(line)
+                  continue
+
+              if in_app and "=" in stripped and not stripped.startswith(("#", ";")):
+                  key = stripped.split("=", 1)[0].strip().lower()
+                  if key in settings:
+                      if key not in seen:
+                          output.append(f"{key} = {settings[key]}\n")
+                          seen.add(key)
+                      continue
+
+              output.append(line)
+
+          if in_app:
+              for key, value in settings.items():
+                  if key not in seen:
+                      output.append(f"{key} = {value}\n")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.writelines(output)
+
+          print("Buildozer SDK ayarları yazıldı.")
+          PY
+
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
       - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install buildozer cython==0.29.36
 
-      - name: Configure project
-        shell: bash
-        run: |
-          set -e
-          PROJECT="$GITHUB_WORKSPACE/SQZGIN_NEON_ESCAPE - Kopya"
-
-          if [ ! -f "$PROJECT/buildozer.spec" ]; then
-            echo "::error::buildozer.spec bulunamadı."
-            find "$GITHUB_WORKSPACE" -maxdepth 4 \
-              -name buildozer.spec -print
-            exit 1
-          fi
-
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-
       - name: Build APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd "$PROJECT"
 
-          export ANDROID_HOME=/usr/local/lib/android/sdk
-          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          echo "SDK: $ANDROID_HOME"
+          grep -E 'android\.(sdk_path|ndk_path|api|minapi|build_tools_version|accept_sdk_license)' \
+            buildozer.spec
 
           buildozer -v android debug
 
