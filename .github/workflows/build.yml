@@ -18,7 +18,6 @@ jobs:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       PIP_NO_INPUT: "1"
-      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
 
     steps:
       - name: Checkout repository
@@ -45,55 +44,47 @@ jobs:
             libtinfo5 cmake libffi-dev libssl-dev \
             build-essential
 
-      - name: Prepare Android SDK
+      - name: Prepare Android SDK and sdkmanager
         shell: bash
         run: |
           set -euo pipefail
 
           SDK="$ANDROID_SDK_ROOT"
+
           SDKMANAGER="$(find "$SDK/cmdline-tools" \
             -type f -name sdkmanager 2>/dev/null | head -n 1)"
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager bulunamadı: $SDK"
+            echo "::error::sdkmanager bulunamadı."
+            find "$SDK" -type f -name sdkmanager -print || true
             exit 1
           fi
 
-          # Lisansları etkileşimsiz kabul et.
+          # Buildozer eski tools/bin yolunu bekliyor.
+          mkdir -p "$SDK/tools/bin"
+          ln -sfn "$SDKMANAGER" "$SDK/tools/bin/sdkmanager"
+
+          # Lisansları kabul et.
           set +o pipefail
           yes | "$SDKMANAGER" --licenses || true
           set -o pipefail
 
-          # Buildozer'ın kullandığı SDK paketlerini yükle.
+          # Android SDK bileşenlerini kur.
           "$SDKMANAGER" --install \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;33.0.2" \
             "ndk;25.2.9519653"
 
-          AIDL="$SDK/build-tools/33.0.2/aidl"
+          # Buildozer'ın beklediği sdkmanager yolunu doğrula.
+          test -x "$SDK/tools/bin/sdkmanager"
 
-          if [ ! -x "$AIDL" ]; then
-            echo "::error::AIDL bulunamadı: $AIDL"
-            find "$SDK/build-tools" -name aidl -type f -print || true
-            exit 1
-          fi
-
-          echo "$SDK/build-tools/33.0.2" >> "$GITHUB_PATH"
+          echo "$SDK/tools/bin" >> "$GITHUB_PATH"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/build-tools/33.0.2" >> "$GITHUB_PATH"
 
-          # Buildozer'ın beklediği dizine SDK araçlarını bağla.
-          BUILDOZER_SDK="$HOME/.buildozer/android/platform/android-sdk"
-          mkdir -p "$BUILDOZER_SDK"
-
-          for item in build-tools platforms platform-tools licenses ndk; do
-            if [ -d "$SDK/$item" ]; then
-              ln -sfn "$SDK/$item" "$BUILDOZER_SDK/$item"
-            fi
-          done
-
-          echo "Android SDK hazır."
-          "$AIDL" --version || true
+          echo "sdkmanager bağlantısı hazır."
+          "$SDK/tools/bin/sdkmanager" --version
 
       - name: Install Buildozer
         run: |
@@ -115,7 +106,6 @@ jobs:
             exit 1
           fi
 
-          # Projedeki mevcut ayarları koru, SDK yollarını güncelle.
           python - "$SPEC" <<'PY'
           import sys
 
@@ -144,6 +134,7 @@ jobs:
                           if key not in seen:
                               output.append(f"{key} = {value}\n")
                               seen.add(key)
+
                   in_app = stripped.lower() == "[app]"
                   output.append(line)
                   continue
@@ -153,6 +144,7 @@ jobs:
                   and not stripped.startswith(("#", ";"))
               ):
                   key = stripped.split("=", 1)[0].strip().lower()
+
                   if key in settings:
                       if key not in seen:
                           output.append(f"{key} = {settings[key]}\n")
@@ -169,7 +161,7 @@ jobs:
           with open(path, "w", encoding="utf-8") as f:
               f.writelines(output)
 
-          print("buildozer.spec güncellendi.")
+          print("buildozer.spec yapılandırıldı.")
           PY
 
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
@@ -181,12 +173,12 @@ jobs:
 
           cd "$PROJECT"
 
-          export ANDROID_HOME=/usr/local/lib/android/sdk
-          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          echo "Android SDK: $ANDROID_HOME"
+          echo "sdkmanager: $ANDROID_HOME/tools/bin/sdkmanager"
 
           buildozer -v android debug
 
-      - name: Upload APK artifact
+      - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
